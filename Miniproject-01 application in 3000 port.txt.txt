@@ -1,0 +1,198 @@
+PROJECT IMPLEMENTATION – STEP BY STEP
+
+1️ Clone & Run React Application (Local)
+git clone https://github.com/Vennilavan12/Brain-Tasks-App.git
+cd Brain-Tasks-App
+npm install
+npm start
+
+2️ Dockerize the Application
+🔹 Create Dockerfile
+
+Inside project root:
+
+# Step 1: Build Stage
+FROM node:18-alpine AS build
+
+WORKDIR /app
+COPY package*.json ./
+RUN npm install
+COPY . .
+RUN npm run build
+
+# Step 2: Production Stage
+FROM nginx:alpine
+COPY --from=build /app/build /usr/share/nginx/html
+
+EXPOSE 3000
+CMD ["nginx", "-g", "daemon off;"]
+
+docker build -t brain-tasks-app .
+
+docker images
+docker run -d -p 3000:80 brain-tasks-app
+
+3️ Push Image to AWS ECR
+🔹 Create ECR Repository
+
+Go to:
+👉 AWS Console → ECR → Create Repository
+Name: brain-tasks-app
+
+Or CLI:
+
+aws ecr create-repository --repository-name brain-tasks-app
+
+🔹 Login to ECR
+aws ecr get-login-password --region <region> | \
+docker login --username AWS --password-stdin <account-id>.dkr.ecr.<region>.amazonaws.com
+
+🔹 Tag Image
+docker tag brain-tasks-app:latest \
+<account-id>.dkr.ecr.<region>.amazonaws.com/brain-tasks-app:latest
+
+🔹 Push Image
+docker push <account-id>.dkr.ecr.<region>.amazonaws.com/brain-tasks-app:latest
+
+4️ Setup Kubernetes in AWS EKS
+
+Use Amazon Elastic Kubernetes Service
+
+🔹 Create EKS Cluster (Using eksctl)
+eksctl create cluster \
+--name brain-cluster \
+--region ap-south-1 \
+--nodegroup-name brain-nodes \
+--node-type t3.medium \
+--nodes 2
+
+
+Verify:
+
+kubectl get nodes
+
+5 Kubernetes YAML Files
+🔹 deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: brain-tasks-deployment
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: brain-tasks
+  template:
+    metadata:
+      labels:
+        app: brain-tasks
+    spec:
+      containers:
+      - name: brain-tasks
+        image: <account-id>.dkr.ecr.<region>.amazonaws.com/brain-tasks-app:latest
+        ports:
+        - containerPort: 80
+
+🔹 service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: brain-tasks-service
+spec:
+  type: LoadBalancer
+  selector:
+    app: brain-tasks
+  ports:
+    - port: 80
+      targetPort: 80
+
+🔹 Deploy to EKS
+kubectl apply -f deployment.yaml
+kubectl apply -f service.yaml
+
+kubectl get svc
+You will get:
+
+arduino
+Copy code
+EXTERNAL-IP
+👉 That is your Kubernetes LoadBalancer ARN / DNS
+
+6️ CodeBuild Setup
+Use AWS CodeBuild
+
+🔹 Create buildspec.yml
+yaml
+Copy code
+version: 0.2
+
+phases:
+  pre_build:
+    commands:
+      - echo Logging in to Amazon ECR...
+      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin <account-id>.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
+  build:
+    commands:
+      - echo Building Docker image...
+      - docker build -t brain-tasks-app .
+      - docker tag brain-tasks-app:latest <account-id>.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/brain-tasks-app:latest
+  post_build:
+    commands:
+      - echo Pushing Docker image...
+      - docker push <account-id>.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/brain-tasks-app:latest
+      - kubectl apply -f deployment.yaml
+      - kubectl apply -f service.yaml
+Environment:
+
+Managed Image: Amazon Linux
+
+Enable Privileged Mode (for Docker)
+
+7️ CodeDeploy Setup
+Use AWS CodeDeploy
+
+🔹 appspec.yml
+yaml
+Copy code
+version: 0.0
+os: linux
+files:
+  - source: /
+    destination: /app
+hooks:
+  AfterInstall:
+    - location: scripts/deploy.sh
+      timeout: 300
+
+8️ CodePipeline Setup
+Use AWS CodePipeline
+
+Pipeline Stages:
+
+1️,Source → GitHub
+2️,Build → CodeBuild
+3️,Deploy → CodeDeploy (EKS)
+
+9️ Version Control – Push to GitHub
+bash
+Copy code
+git init
+git add .
+git commit -m "Initial commit - Brain Tasks App DevOps Setup"
+git branch -M main
+git remote add origin https://github.com/<your-username>/brain-tasks-devops.git
+git push -u origin main
+
+🔟 Monitoring
+Use:
+👉 Amazon CloudWatch
+
+Monitor:
+
+CodeBuild Logs
+
+CodeDeploy Logs
+
+EKS Logs
+
+Application Logs
